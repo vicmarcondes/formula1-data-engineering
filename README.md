@@ -1,1 +1,180 @@
-# formula1-data-engineering
+# Formula 1 Data Engineering
+
+End-to-end batch data engineering project built with **Azure Databricks**, **Apache Spark**, **Delta Lake**, **Unity Catalog**, and **Azure Data Lake Storage Gen2**.
+
+The project processes Formula 1 racing data through a medallion architecture, transforming source CSV and JSON files into governed Delta tables and an analytics-ready dimensional model for driver and constructor standings.
+
+> This project was developed as part of the [Azure Databricks & Spark for Data Engineers: Hands-on Project](https://www.udemy.com/course/azure-databricks-spark-core-for-data-engineers/) course and adapted in a personal Azure Databricks environment.
+
+## Project objectives
+
+- Configure governed access to ADLS Gen2 through Unity Catalog.
+- Ingest Formula 1 CSV and JSON datasets with explicit schemas.
+- Add ingestion metadata for traceability and auditing.
+- Standardize, clean, and deduplicate data using PySpark.
+- Store data as managed Delta tables across Bronze, Silver, and Gold layers.
+- Build a dimensional model for analytical workloads.
+- Produce SQL views for driver and constructor championship standings.
+- Orchestrate the execution flow with a Databricks Lakeflow Job.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A["Source files<br/>CSV and JSON"] --> B["ADLS Gen2<br/>Landing"]
+    B --> C["Bronze<br/>Raw Delta tables"]
+    C --> D["Silver<br/>Cleaned Delta tables"]
+    D --> E["Gold<br/>Dimensions and fact"]
+    E --> F["Analytics<br/>SQL views"]
+```
+
+The source files are stored in an **external Unity Catalog volume**. Bronze, Silver, and Gold datasets are written as **managed Delta tables**, with storage locations governed by Unity Catalog.
+
+## Data pipeline
+
+### Landing
+
+The landing layer preserves the original source files in ADLS Gen2 and exposes them to Databricks through the external volume:
+
+```text
+/Volumes/formula1/landing/files
+```
+
+The project works with six source datasets:
+
+| Dataset | Purpose |
+| --- | --- |
+| Circuits | Circuit names and geographical information |
+| Races | Seasons, rounds, dates, and race information |
+| Constructors | Formula 1 teams and nationalities |
+| Drivers | Driver identity and biographical information |
+| Results | Race results by driver and constructor |
+| Sprints | Sprint session results |
+
+### Bronze
+
+The Bronze layer ingests the original CSV and JSON files into Delta tables. The ingestion notebooks:
+
+- define explicit PySpark schemas;
+- support single-file and folder-based ingestion;
+- retain source-level attributes;
+- add an ingestion timestamp;
+- capture the source file path through Spark metadata.
+
+The reusable `add_ingestion_metadata` helper centralizes the audit columns applied during ingestion.
+
+### Silver
+
+The Silver layer standardizes and validates the Bronze data by:
+
+- selecting attributes required downstream;
+- renaming columns to `snake_case`;
+- normalizing text values;
+- flattening nested structures;
+- filtering invalid or incomplete records;
+- removing duplicates using business keys;
+- persisting the results as Delta tables.
+
+### Gold
+
+The Gold layer creates an analytics-ready dimensional model:
+
+| Object | Type | Description |
+| --- | --- | --- |
+| `dim_races` | Dimension | Race and circuit attributes |
+| `dim_constructors` | Dimension | Constructor and geographical region attributes |
+| `dim_drivers` | Dimension | Driver and geographical region attributes |
+| `fact_session_results` | Fact | Combined race and sprint session results |
+| `ref_nationality_region` | Reference | Curated nationality-to-region mapping |
+
+The fact table combines race and sprint results and derives analytical flags such as:
+
+- `is_win`;
+- `is_podium`;
+- `has_points`;
+- `session_type`.
+
+### Analytics
+
+Spark SQL views aggregate the dimensional model to calculate seasonal standings:
+
+- `v_driver_stading`: race starts, points, victories, podiums, and driver ranking;
+- `v_constructor_stading`: race starts, points, victories, podiums, and constructor ranking.
+
+Rankings are calculated with SQL window functions, partitioned by season.
+
+## Gold data model
+
+![Formula 1 Gold data model](z-course-images/formula1-gold-data-erd.png)
+
+## Repository structure
+
+```text
+formula1-data-engineering/
+├── 00-common/       # Shared environment configuration and helper functions
+├── 01-setup/        # Unity Catalog, schemas, locations, and volume setup
+├── 02-bronze/       # Source ingestion notebooks
+├── 03-silver/       # Cleaning and standardization notebooks
+├── 04-gold/         # Dimensional model and reference data
+├── 05-analytics/    # Standings views and analytical SQL
+└── z-course-images/ # Architecture and data model assets
+```
+
+## Technologies
+
+- Azure Databricks
+- Apache Spark
+- PySpark
+- Spark SQL
+- Delta Lake
+- Unity Catalog
+- Azure Data Lake Storage Gen2
+- Databricks Lakeflow Jobs
+- Git and GitHub
+
+## Execution order
+
+1. Run the environment setup notebook in `01-setup`.
+2. Upload the source files to the landing volume.
+3. Run the ingestion notebooks in `02-bronze`.
+4. Run the transformation notebooks in `03-silver`.
+5. Create the nationality-region reference and Gold model in `04-gold`.
+6. Create the analytical views in `05-analytics`.
+7. Query the standings views through Databricks SQL.
+
+The operational workflow is orchestrated through a Lakeflow Job in the Databricks workspace. Its workspace configuration is not currently stored as code in this repository.
+
+## Prerequisites
+
+To reproduce the project, you need:
+
+- an Azure subscription;
+- an Azure Databricks workspace with Unity Catalog enabled;
+- an ADLS Gen2 storage account;
+- a Databricks access connector or another supported Azure identity;
+- a Unity Catalog storage credential with access to the target container;
+- compute capable of running the project notebooks.
+
+Cloud resource names and storage paths in the setup and configuration notebooks must be adapted to the target environment.
+
+## Current implementation notes
+
+- The pipeline currently uses batch processing and full-table overwrite writes.
+- Source files and generated datasets are not included in the repository.
+- Cloud credentials and secrets must remain outside source control.
+- Lakeflow Job configuration is maintained in the workspace and is not yet represented through a Declarative Automation Bundle.
+
+## Possible next steps
+
+- Parameterize environment-specific catalog and storage settings.
+- Implement incremental ingestion and Delta `MERGE` operations.
+- Add automated data-quality checks.
+- Version the Lakeflow Job with a Declarative Automation Bundle.
+- Add unit and integration tests.
+- Configure CI/CD for validation and deployment.
+
+## Author
+
+**Victor Moreno**
+
+- GitHub: [@vicmarcondes](https://github.com/vicmarcondes)
