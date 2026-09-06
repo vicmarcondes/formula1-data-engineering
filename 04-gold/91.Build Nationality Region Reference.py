@@ -12,7 +12,7 @@
 
 # COMMAND ----------
 
-# MAGIC %run ../00-common/01.enviroment-config
+# MAGIC %run ../00-common/01.environment-config
 
 # COMMAND ----------
 
