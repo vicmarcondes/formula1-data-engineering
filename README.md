@@ -98,8 +98,8 @@ The fact table combines race and sprint results and derives analytical flags suc
 
 Spark SQL views aggregate the dimensional model to calculate seasonal standings:
 
-- `v_driver_stading`: race starts, points, victories, podiums, and driver ranking;
-- `v_constructor_stading`: race starts, points, victories, podiums, and constructor ranking.
+- `v_driver_standing`: race starts, points, victories, podiums, and driver ranking;
+- `v_constructor_standing`: race starts, points, victories, podiums, and constructor ranking.
 
 Rankings are calculated with SQL window functions, partitioned by season.
 
@@ -143,6 +143,30 @@ formula1-data-engineering/
 7. Query the standings views through Databricks SQL.
 
 The operational workflow is orchestrated through a Lakeflow Job in the Databricks workspace. Its workspace configuration is not currently stored as code in this repository.
+
+## Lakeflow Job orchestration
+
+The workspace job runs independent ingestion branches in parallel and applies task dependencies before downstream transformations:
+
+```mermaid
+flowchart LR
+    IR["Ingest races"] --> TR["Transform races"]
+    IC["Ingest circuits"] --> TC["Transform circuits"]
+    TR --> DR["Build race dimension"]
+    TC --> DR
+
+    IS["Ingest sprints"] --> TS["Transform sprints"]
+    IRE["Ingest results"] --> TRE["Transform results"]
+    TS --> FR["Build results fact"]
+    TRE --> FR
+
+    NR["Build nationality-region reference"] --> DC["Build constructor dimension"]
+    NR --> DD["Build driver dimension"]
+    ICO["Ingest constructors"] --> TCO["Transform constructors"] --> DC
+    ID["Ingest drivers"] --> TD["Transform drivers"] --> DD
+```
+
+This dependency graph allows unrelated branches to run concurrently while ensuring that each Gold table starts only after all required upstream tables are available. The analytical views are created separately after the Gold model is ready.
 
 ## Prerequisites
 
