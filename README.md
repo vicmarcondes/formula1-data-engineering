@@ -10,7 +10,10 @@ The project processes Formula 1 racing data through a medallion architecture, tr
 
 - Configure governed access to ADLS Gen2 through Unity Catalog.
 - Ingest Formula 1 CSV and JSON datasets with explicit schemas.
-- Add ingestion metadata for traceability and auditing.
+- Add ingestion metadata and batch identifiers for traceability and auditing.
+- Process source data incrementally through parameterized batches.
+- Reprocess Bronze partitions idempotently with Delta Lake `replaceWhere`.
+- Apply Delta Lake `MERGE` upserts in the Silver and Gold layers.
 - Standardize, clean, and deduplicate data using PySpark.
 - Store data as managed Delta tables across Bronze, Silver, and Gold layers.
 - Build a dimensional model for analytical workloads.
@@ -37,8 +40,10 @@ The source files are stored in an **external Unity Catalog volume**. Bronze, Sil
 The landing layer preserves the original source files in ADLS Gen2 and exposes them to Databricks through the external volume:
 
 ```text
-/Volumes/formula1/landing/files
+/Volumes/formula1/landing/files/<batch_id>
 ```
+
+Each delivery is organized under a directory identified by `batch_id` (for example, `2025-01`). The same parameter is passed through the Lakeflow Job to every pipeline layer.
 
 The project works with six source datasets:
 
@@ -59,9 +64,12 @@ The Bronze layer ingests the original CSV and JSON files into Delta tables. The 
 - support single-file and folder-based ingestion;
 - retain source-level attributes;
 - add an ingestion timestamp;
-- capture the source file path through Spark metadata.
+- capture the source file path through Spark metadata;
+- add the `batch_id` received from the job parameter;
+- partition Delta tables by `batch_id`;
+- use `replaceWhere` to overwrite only the partition being processed.
 
-The reusable `add_ingestion_metadata` helper centralizes the audit columns applied during ingestion.
+The reusable `add_ingestion_metadata` helper centralizes the audit columns applied during ingestion. The `write_to_bronze` helper makes batch reprocessing idempotent: rerunning the same `batch_id` replaces only that batch instead of duplicating it or overwriting the complete table.
 
 ### Silver
 
@@ -73,7 +81,10 @@ The Silver layer standardizes and validates the Bronze data by:
 - flattening nested structures;
 - filtering invalid or incomplete records;
 - removing duplicates using business keys;
-- persisting the results as Delta tables.
+- filtering the Bronze source by the current `batch_id`;
+- persisting the results as Delta tables with reusable upsert logic.
+
+On the first execution, each Silver dataset is created as a Delta table. Subsequent executions use Delta Lake `MERGE` operations based on the dataset business key. Matched records are updated only when the incoming batch is at least as recent as the stored batch, while new records are inserted.
 
 ### Gold
 
@@ -86,6 +97,8 @@ The Gold layer creates an analytics-ready dimensional model:
 | `dim_drivers` | Dimension | Driver and geographical region attributes |
 | `fact_session_results` | Fact | Combined race and sprint session results |
 | `ref_nationality_region` | Reference | Curated nationality-to-region mapping |
+
+Gold notebooks process only the current batch and use Delta Lake `MERGE` operations to update existing dimension and fact records or insert new ones. Reusable helpers add `created_timestamp` and `updated_timestamp` audit fields.
 
 The fact table combines race and sprint results and derives analytical flags such as:
 
@@ -135,12 +148,13 @@ formula1-data-engineering/
 ## Execution order
 
 1. Run the environment setup notebook in `01-setup`.
-2. Upload the source files to the landing volume.
-3. Run the ingestion notebooks in `02-bronze`.
-4. Run the transformation notebooks in `03-silver`.
-5. Create the nationality-region reference and Gold model in `04-gold`.
-6. Create the analytical views in `05-analytics`.
-7. Query the standings views through Databricks SQL.
+2. Upload each source delivery to a batch directory in the landing volume.
+3. Define the `p_batch_id` parameter for the batch being processed.
+4. Run the ingestion notebooks in `02-bronze`.
+5. Run the transformation notebooks in `03-silver`.
+6. Create the nationality-region reference and Gold model in `04-gold`.
+7. Create the analytical views in `05-analytics`.
+8. Query the standings views through Databricks SQL.
 
 The operational workflow is orchestrated through a Lakeflow Job in the Databricks workspace. Its workspace configuration is not currently stored as code in this repository.
 
@@ -166,7 +180,7 @@ flowchart LR
     ID["Ingest drivers"] --> TD["Transform drivers"] --> DD
 ```
 
-This dependency graph allows unrelated branches to run concurrently while ensuring that each Gold table starts only after all required upstream tables are available. The analytical views are created separately after the Gold model is ready.
+The Lakeflow Job receives `p_batch_id` as a job parameter and forwards it to the Bronze, Silver, and Gold notebook tasks. This dependency graph allows unrelated branches to run concurrently while ensuring that each Gold table starts only after all required upstream tables are available. The analytical views are created separately after the Gold model is ready.
 
 ## Prerequisites
 
@@ -183,7 +197,10 @@ Cloud resource names and storage paths in the setup and configuration notebooks 
 
 ## Current implementation notes
 
-- The pipeline currently uses batch processing and full-table overwrite writes.
+- The pipeline uses incremental batch processing controlled by `p_batch_id`.
+- Bronze tables are partitioned by `batch_id`; reprocessing uses `replaceWhere` to replace only the selected batch.
+- Silver and Gold tables use Delta Lake `MERGE` for idempotent upserts based on business keys.
+- The initial table creation uses overwrite mode only when the target table does not yet exist.
 - Source files and generated datasets are not included in the repository.
 - Cloud credentials and secrets must remain outside source control.
 - Lakeflow Job configuration is maintained in the workspace and is not yet represented through a Declarative Automation Bundle.
@@ -191,7 +208,6 @@ Cloud resource names and storage paths in the setup and configuration notebooks 
 ## Possible next steps
 
 - Parameterize environment-specific catalog and storage settings.
-- Implement incremental ingestion and Delta `MERGE` operations.
 - Add automated data-quality checks.
 - Version the Lakeflow Job with a Declarative Automation Bundle.
 - Add unit and integration tests.
